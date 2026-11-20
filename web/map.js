@@ -119,6 +119,11 @@ const MapView = (() => {
       <div class="mapelev" id="melev" hidden></div><div class="mapscale" id="mscale"></div><div class="mapattr">© OpenStreetMap contributors · Microsoft buildings · USGS · USDA · NOAA · USACE · CDFW · CalGEM · Natural Earth</div>
     </div>
     <div class="maptools">
+      <section class="panel" id="dirpanel" hidden><h2>Directions</h2><p class="small muted" style="margin:0 0 8px">By road, from the offline road data. It does not show closures, damage or traffic.</p>
+        <form id="df" class="dirform"><label class="sr" for="dfrom">From: an address, town, ZIP code, or a point as lat,lon</label><input id="dfrom" placeholder="From: address, town or ZIP" autocomplete="off">
+          <label class="sr" for="dto">To: an address, town, ZIP code, or a point as lat,lon</label><input id="dto" placeholder="To: address, town or ZIP" autocomplete="off">
+          <div class="dirbtns"><button class="btn" id="dgo">Get directions</button><button type="button" class="btn plain" id="dcenter" title="Start from the point at the middle of the map">From map center</button></div></form>
+        <div class="dirres" id="dres" aria-live="polite"></div></section>
       <section class="panel"><h2>Nearest to the map center</h2><p class="small muted" style="margin:0 0 4px">For the layers you have on. Straight-line distance, not by road.</p><div class="nearres" id="near" aria-live="polite"></div></section>
       <section class="panel"><h2>Your area</h2><p class="small muted" style="margin:0 0 8px">The home button returns here. Saved on this device only.</p><button class="btn plain" id="sethome">Make the map center my area</button>${navigator.geolocation && isSecureContext ? ' <button class="btn plain" id="gps">Use my location</button>' : ''}</section>
       <section class="panel"><h2>What this map covers</h2><ul class="list small" id="mdata"><li class="muted">Loading…</li></ul></section>
@@ -168,6 +173,8 @@ const MapView = (() => {
     const gps = $('gps');
     if (gps) gps.onclick = () => navigator.geolocation.getCurrentPosition(p => { st.mark = { lat: p.coords.latitude, lon: p.coords.longitude, name: 'You are here (approx.)' }; go(p.coords.latitude, p.coords.longitude, 15) }, e => toastMap('Location unavailable: ' + e.message), { timeout: 15000 });
     $('pf').onsubmit = e => { e.preventDefault(); findPlace($('pq').value.trim()) };
+    $('df').onsubmit = e => { e.preventDefault(); getRoute($('dfrom').value.trim(), $('dto').value.trim()) };
+    $('dcenter').onclick = () => { $('dfrom').value = st.lat.toFixed(5) + ', ' + st.lon.toFixed(5); $('dto').focus() };   // no location lookup: the person points at where they are
     $('pq').addEventListener('input', () => { if (!$('pq').value) $('pres').hidden = true });
     $('layers-btn').onclick = () => { const p = $('layers'), open = p.hidden; p.hidden = !open; $('layers-btn').setAttribute('aria-expanded', open); $('pres').hidden = true; if (open) { $('card').hidden = true; renderLayers() } };
     st.onKey = e => { if (e.key === 'Escape' && st) { if (!$('layers').hidden) { $('layers').hidden = true; $('layers-btn').setAttribute('aria-expanded', 'false') } else if (!$('pres').hidden) $('pres').hidden = true; else if (!$('card').hidden) closeCard(); else if ($('mapwrap').classList.contains('max')) toggleFull() } };
@@ -177,6 +184,7 @@ const MapView = (() => {
       if (!st) return;
       st.national = info.national; st.ver = info.version; st.aerialDetail = info.aerial_detail; st.aerialRev = info.aerial_rev; st.terrainCircle = info.terrain_circle;
       describe(info); if (openWhole) fit(wholeMap(), 0.92, true); coverage(); draw();
+      if (info.directions) { $('dirpanel').hidden = false; const f = q.get('from'), t = q.get('to'); if (f && t) { $('dfrom').value = f; $('dto').value = t; getRoute(f, t) } }
       $('mdata').innerHTML = info.datasets.map(d => `<li class="row" style="display:block"><b>${escH(d.label)}</b><span class="muted">${escH(d.status)}</span>${d.bytes ? ` · ${(d.bytes / 1073741824).toFixed(1)} GB` : ''}</li>`).join('') +
         (st.have && !st.have.size ? '' : `<li class="row small muted" style="display:block">${st.have ? '' : 'Not drawn yet: forest types. '}Resource layers are records — fish, wells, mines and crops show where they were recorded or mapped, not proof of what is there now.</li>`);
     }).catch(() => { $('mdata').innerHTML = '<li class="muted">Map details unavailable.</li>'; if (openWhole && st) fit(US, 0.92, true) });
@@ -456,6 +464,7 @@ const MapView = (() => {
     if (st.style.crops !== false) cropLayer(g, V);
     if (!st.style.aerial) terrainLayer(g, V);
     else if (st.style.contours) terrainLayer(g, V, true);
+    if (st.route) routeLayer(g, V);
     labels.sort((a, b) => a.pri - b.pri);
     const boxes = [];
     // pins first reserve their own space so labels don't sit on top of them
@@ -509,6 +518,7 @@ const MapView = (() => {
       g.shadowColor = 'transparent';
       st.hits.push(p);
     }
+    if (st.route) routeEnds(g, V);
     if (st.mark) {
       const [mx, my] = px(st.mark.lat, st.mark.lon, V);
       g.beginPath(); g.moveTo(mx, my); g.bezierCurveTo(mx - 3, my - 9, mx - 10, my - 13, mx - 10, my - 21); g.arc(mx, my - 21, 10, Math.PI, 0); g.bezierCurveTo(mx + 10, my - 13, mx + 3, my - 9, mx, my);
@@ -863,6 +873,43 @@ const MapView = (() => {
         if (innerWidth < 1000) $('mapwrap').scrollIntoView({ behavior: 'smooth', block: 'start' });
       });
     } catch { if (st === state) box.innerHTML = '<p class="muted small">Nearby search is unavailable.</p>' }
+  }
+  // The route from "Directions": the line, the fuel stations along it (from zoom 8), and A and B.
+  function routeLayer(g, V) {
+    const r = st.route;
+    g.save(); g.lineJoin = 'round'; g.lineCap = 'round'; g.beginPath();
+    r.line.forEach(([la, lo], i) => { const [x, y] = px(la, lo, V); if (i) g.lineTo(x, y); else g.moveTo(x, y) });
+    g.lineWidth = 8; g.strokeStyle = 'rgba(255,255,255,.92)'; g.stroke(); g.lineWidth = 4.5; g.strokeStyle = '#1565c0'; g.stroke();
+    if (st.z >= 8) for (const f of r.fuel) { const [x, y] = px(f.lat, f.lon, V); if (x < -6 || x > V.w + 6 || y < -6 || y > V.h + 6) continue; g.beginPath(); g.arc(x, y, 4.5, 0, 7); g.fillStyle = '#37474f'; g.fill(); g.lineWidth = 1.5; g.strokeStyle = '#fff'; g.stroke() }
+    g.restore();
+  }
+  function routeEnds(g, V) {   // over the labels and pins, so A and B are never covered
+    g.save(); g.textAlign = 'center'; g.textBaseline = 'middle'; g.font = '700 12px -apple-system,Segoe UI,sans-serif';
+    for (const [p, col, t] of [[st.route.from, '#1b5e20', 'A'], [st.route.to, '#b71c1c', 'B']]) { const [x, y] = px(p.lat, p.lon, V); g.beginPath(); g.arc(x, y, 11, 0, 7); g.fillStyle = col; g.fill(); g.lineWidth = 2.5; g.strokeStyle = '#fff'; g.stroke(); g.fillStyle = '#fff'; g.fillText(t, x, y + 0.5) }
+    g.restore();
+  }
+  async function getRoute(from, to) {
+    const box = $('dres'); if (!from || !to) { box.innerHTML = '<p class="muted small">Type where the trip starts and where it ends.</p>'; return }
+    const state = st, serial = st.serial.route = (st.serial.route || 0) + 1;
+    box.innerHTML = '<p class="muted small">Working out the route…</p>';
+    try {
+      const r = await fetch(`/api/map/route?from=${encodeURIComponent(from)}&to=${encodeURIComponent(to)}&near=${st.lat.toFixed(3)},${st.lon.toFixed(3)}`).then(r => r.json());
+      if (st !== state || serial !== st.serial.route) return;
+      if (r.error) { st.route = null; draw(); box.innerHTML = `<p class="notice small">${escH(r.error)}</p>`; return }
+      st.route = r; closeCard();
+      const lats = r.line.map(p => p[0]), lons = r.line.map(p => p[1]);
+      fit([Math.min(...lons), Math.min(...lats), Math.max(...lons), Math.max(...lats)], 0.8, true);
+      const end = p => escH(p.name) + (p.detail && !p.name.includes(p.detail) ? ` <span class="muted">(${escH(p.detail)})</span>` : ''), [gap, g0, g1] = r.fuel_gap;
+      box.innerHTML = `<p class="dirsum"><b>${r.miles} miles by road</b> · about ${escH(r.time)} of driving, with no traffic or stops</p>
+        <p class="small"><b>A</b> ${end(r.from)}<br><b>B</b> ${end(r.to)}<br><span class="muted">Straight line: ${r.straight_miles} miles</span></p>
+        ${r.roads.length ? `<p class="small"><b>Main roads:</b> ${r.roads.map(([road, mi]) => `${escH(road)} (${mi} mi)`).join(' → ')}</p>` : ''}
+        <p class="small"><b>Fuel:</b> ${r.fuel_count ? `${r.fuel_count} fuel station${r.fuel_count === 1 ? '' : 's'} mapped within 1 mile of the route. Longest stretch with none: ${gap} miles (mile ${g0} to mile ${g1}).` : 'no fuel station is mapped within 1 mile of the route.'}</p>
+        <details open><summary>Steps (${r.steps.length})</summary><ol class="dirsteps">${r.steps.map(s => `<li>${escH(s.text)}${s.then ? `<small>${escH(s.then)}</small>` : ''}</li>`).join('')}</ol></details>
+        ${r.fuel_count ? `<details><summary>Fuel stations on the way (${r.fuel_count})</summary><div class="nearres dirfuel">${r.fuel.map((f, i) => `<button data-f="${i}"><span><b>${escH(f.name || 'Fuel station')}</b><small>mile ${f.mile} · ${f.off < 0.1 ? 'on the route' : f.off + ' mi off the route'}</small></span></button>`).join('')}</div></details>` : ''}
+        <p class="small muted">Roads and fuel stations as mapped by OpenStreetMap contributors. A mapped station may be shut or out of fuel.</p><button type="button" class="btn plain" id="dclear">Clear route</button>`;
+      box.querySelectorAll('[data-f]').forEach(b => b.onclick = () => { const f = r.fuel[+b.dataset.f]; st.mark = { lat: f.lat, lon: f.lon, name: f.name || 'Fuel station', kind: 'Fuel station' }; go(f.lat, f.lon, 15) });
+      $('dclear').onclick = () => { st.route = null; box.innerHTML = ''; draw() };
+    } catch { if (st === state) box.innerHTML = '<p class="muted small">Directions are unavailable.</p>' }
   }
   async function findPlace(q) {
     const box = $('pres'); if (!q) { box.hidden = true; return }

@@ -641,6 +641,10 @@ a.card:active{opacity:.9}
 @media (min-width:900px){.mapgrid{display:grid;grid-template-columns:minmax(0,1fr) 350px;gap:16px}.maptools{margin-top:0}}
 .panel{background:var(--paper);border:1px solid var(--line2);border-radius:var(--r);padding:14px;box-shadow:var(--shadow)}
 .panel h2{margin:0 0 8px;font-size:18px}
+.dirform{display:grid;gap:8px}.dirform input{height:42px;min-width:0;border:1px solid var(--line);border-radius:10px;padding:0 12px;font-size:16px;background:var(--paper);color:var(--ink)}
+.dirform input:focus-visible{outline:3px solid var(--focus)}.dirbtns{display:flex;gap:8px;flex-wrap:wrap}
+.dirres{margin-top:10px}.dirres p{margin:0 0 8px}.dirsum{font-size:17px}.dirres details{margin:0 0 8px}.dirres summary{cursor:pointer;font-weight:600;padding:4px 0}
+.dirsteps{margin:6px 0;padding-left:24px}.dirsteps li{padding:6px 0;border-bottom:1px solid var(--line2);font-size:15px}.dirsteps small{display:block;color:var(--ink3)}.dirfuel{max-height:260px;overflow:auto}
 .placeres button,.nearres button{all:unset;color:var(--ink);box-sizing:border-box;display:block;width:100%;padding:10px 8px;border-top:1px solid var(--line2);cursor:pointer;font-size:15px}
 .placeres button:focus-visible,.nearres button:focus-visible{outline:3px solid var(--focus)}
 .placeres button small,.nearres button small{display:block;color:var(--ink3)}

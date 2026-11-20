@@ -34,7 +34,7 @@ if __name__ == '__main__':  # --data must be known before the paths below are wo
 
 import engine.paths as lastbook_paths  # noqa: E402  (data folder and program folder can differ in the packaged app)
 from engine.paths import ro_uri  # noqa: E402
-from engine import saved_pages, address_search, encyclopedias  # noqa: E402
+from engine import saved_pages, address_search, encyclopedias, directions  # noqa: E402
 from engine.setup import api as setup_api  # noqa: E402  (the one module that may download: only when the person asks)
 HERE = lastbook_paths.DATA  # holds derived/
 APP = lastbook_paths.APP  # holds web/ and content/
@@ -1445,6 +1445,66 @@ def places(q, limit=20, near=None):
     return out[:limit + len(water)]
 
 
+STATES = dict(zip('AL AK AZ AR CA CO CT DE DC FL GA HI ID IL IN IA KS KY LA ME MD MA MI MN MS MO MT NE NV NH NJ NM NY NC ND OH OK OR PA RI SC SD TN TX UT VT VA WA WV WI WY'.split(),
+                  ['Alabama', 'Alaska', 'Arizona', 'Arkansas', 'California', 'Colorado', 'Connecticut', 'Delaware', 'District of Columbia', 'Florida', 'Georgia', 'Hawaii', 'Idaho', 'Illinois',
+                   'Indiana', 'Iowa', 'Kansas', 'Kentucky', 'Louisiana', 'Maine', 'Maryland', 'Massachusetts', 'Michigan', 'Minnesota', 'Mississippi', 'Missouri', 'Montana', 'Nebraska', 'Nevada',
+                   'New Hampshire', 'New Jersey', 'New Mexico', 'New York', 'North Carolina', 'North Dakota', 'Ohio', 'Oklahoma', 'Oregon', 'Pennsylvania', 'Rhode Island', 'South Carolina',
+                   'South Dakota', 'Tennessee', 'Texas', 'Utah', 'Vermont', 'Virginia', 'Washington', 'West Virginia', 'Wisconsin', 'Wyoming']))
+SAME_TOWN_MILES = 25   # a street address whose town did not match is taken only this near the town that was named
+POINT = re.compile(r'\s*(-?\d{1,2}(?:\.\d+)?)\s*,\s*(-?\d{1,3}(?:\.\d+)?)\s*')
+
+
+def waypoint(text, near=None):
+    """Where a typed start or end is: 'lat,lon', a street address, or a town, ZIP code or named place. None when it is not found."""
+    text = (text or '').strip()[:120]
+    m = POINT.fullmatch(text)
+    if m and abs(float(m[1])) <= 90 and abs(float(m[2])) <= 180:
+        return {'name': f'{float(m[1]):.4f}, {float(m[2]):.4f}', 'kind': 'Point on the map', 'detail': '', 'lat': float(m[1]), 'lon': float(m[2])}
+    if not text:
+        return None
+    m = re.fullmatch(r'(.+?),\s*([A-Za-z][A-Za-z .]+)', text)
+    if m and not address_search.is_address_query(text):   # "Phoenix, AZ": the place finder reads the state as one more word, and a county comes first
+        state = STATES.get(m[2].strip().upper().replace('.', '')) or next((v for v in STATES.values() if v.lower() == m[2].strip().lower()), None)
+        if state:
+            there = [h for h in places(m[1], 20, near=near) if (h.get('detail') or '').endswith(state)]
+            if there:
+                return there[0]
+    hits = places(text, 5, near=near)
+    if hits:
+        return hits[0]
+    if not address_search.is_address_query(text):
+        return None
+    # PROTOTYPE: the road files' region is not a state installed here, so its address indexes (the published ones, unchanged)
+    # sit beside the road files. An installed state's index has already answered above, through places().
+    indexes = (HERE / 'derived' / 'geo', directions.folder(HERE))
+    for geo in indexes[1:]:
+        hits = address_search.find_addresses(text, geo, limit=5, near=near)
+        if hits:
+            return hits[0]
+    # "200 W Washington St, Phoenix, AZ": the Arizona index files Phoenix's addresses under post office names (Rio Salado,
+    # Capitol), so the town does not match. Read it as that house number on that street, in that state, nearest that town.
+    m = re.fullmatch(r'([^,]+),\s*([^,]+),\s*([A-Za-z][A-Za-z .]*?)(?:,?\s+\d{5}(?:-\d{4})?)?', text)
+    town = waypoint(f'{m[2]}, {m[3]}', near) if m else None
+    if town:
+        centre = (town['lat'], town['lon'])
+        found = [h for geo in indexes for h in address_search.find_addresses(f'{m[1]}, {m[3]}', geo, limit=8, near=centre)]
+        found = [h for h in found if directions.miles_between(centre, (h['lat'], h['lon'])) <= SAME_TOWN_MILES]
+        if found:
+            return min(found, key=lambda h: directions.miles_between(centre, (h['lat'], h['lon'])))
+    return None
+
+
+def route_between(frm, to, near=None):
+    """Road directions between two typed places (engine/directions.py), with what each was understood as."""
+    a, b = waypoint(frm, near), waypoint(to, near)
+    if not a or not b:
+        missing = frm if not a else to
+        return {'error': f'“{missing[:80]}” was not found in the offline place and address data. Try a town, a ZIP code, a full street address, or a point as lat,lon.', 'code': 'not_found'}
+    r = directions.route(HERE, (a['lat'], a['lon']), (b['lat'], b['lon']))
+    pick = lambda p: {k: p.get(k) for k in ('name', 'kind', 'detail', 'lat', 'lon')}
+    return {**r, 'from': pick(a), 'to': pick(b)}
+
+
 _cov = {'at': 0}
 
 
@@ -1614,7 +1674,7 @@ def map_info():
     if pack:
         extra.update(map_contents())
         geo = pack_datasets(extra)
-    return {**extra, 'meta': meta, 'datasets': geo, 'national': {k: v for k, v in national_status().items() if k not in ('source', 'database')}, 'version': data_version(), 'aerial_detail': detail, 'aerial_rev': rev, 'terrain_circle': tdetail}
+    return {**extra, 'meta': meta, 'datasets': geo, 'national': {k: v for k, v in national_status().items() if k not in ('source', 'database')}, 'version': data_version(), 'aerial_detail': detail, 'aerial_rev': rev, 'terrain_circle': tdetail, 'directions': directions.available(HERE)}
 
 
 def pack_datasets(have):
@@ -2088,6 +2148,12 @@ class Handler(library.Handler):
                 return self.send_json(near(float(qs['lat']), float(qs['lon']), cls, int(qs.get('limit', 5))))
             if path == '/api/map/info':
                 return self.send_json(map_info())
+            if path == '/api/map/route':   # road directions between two typed places: engine/directions.py
+                try:
+                    near_pt = tuple(map(float, qs['near'].split(',')))[:2] if qs.get('near') else None
+                except ValueError:
+                    near_pt = None
+                return self.send_json(route_between(qs.get('from', ''), qs.get('to', ''), near=near_pt))
             if path == '/api/places':
                 try:
                     near_pt = tuple(map(float, qs['near'].split(',')))[:2] if qs.get('near') else None

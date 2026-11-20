@@ -259,6 +259,8 @@ const Chat = (() => {
       if ((m.invalid || []).length) h += `<p class="small" style="color:var(--stop)">The model referred to sources that don’t exist (${m.invalid.join(', ')}); those markers were removed.</p>`;
       h += `<div class="legend small"><span><span class="lg-c">1</span> linked to a page or video</span><span><span class="lg-u">dotted</span> the model’s own wording, not linked to a source</span></div>`;
       if (cited.length) h += `<h3 class="srch">Sources (${cited.length})</h3>${srcCards(cited, false)}`;
+      // A route's turns, word for word from the engine: the model is not asked to retype them.
+      for (const s of cited) if (Array.isArray(s.steps) && s.steps.length) h += `<details class="also" open><summary>Turn-by-turn steps (${s.steps.length}), as worked out from the road data</summary><ol class="dirsteps">${s.steps.map(t => `<li>${esc(t)}</li>`).join('')}</ol></details>`;
       else h += `<p class="notice small">This answer has no linked sources. Treat it as unverified.</p>`;
       const other = (m.consulted || []).filter(s => s.kind !== 'place');
       if (other.length) h += `<details class="also"><summary>Also looked at (${other.length}, not used)</summary>${srcCards(other.slice(0, 10), true)}</details>`;
@@ -280,12 +282,14 @@ const Chat = (() => {
     if (s.name === 'view_page') return r.error ? 'Couldn’t view that page' : `Looked at the picture of ${esc(r.title || '')}, page ${esc(a.page)}`;
     if (s.name === 'get_timed_transcript') return r.error ? `No transcript for ${esc(r.title || 'that video')}` : `Read the transcript of ${esc(r.title || '')}`;
     if (s.name === 'lookup_place') return `Looked up “${esc(a.query || '')}” on the offline map`;
+    if (s.name === 'get_directions') return r.error ? `Found no road route from “${esc(plain(raw.from))}” to “${esc(plain(raw.to))}”` : `Worked out the road route from ${esc(r.from || '')} to ${esc(r.to || '')} — ${esc(r.miles ?? '…')} miles`;
     if (s.name === 'search_encyclopedia') return `Searched the encyclopedias for “${esc(a.query || '')}” — ${r.count ?? '…'} article${r.count === 1 ? '' : 's'}`;
     if (s.name === 'read_encyclopedia') return r.error ? 'Tried to read an unknown encyclopedia article' : `Read the encyclopedia article “${esc(r.title || a.article)}”`;
     if (s.name === 'found') return `Matched ${s.count} passage${s.count === 1 ? '' : 's'} for your question`;
     return esc(s.name);
   }
   function srcHref(s) {
+    if (s.kind === 'place' && s.route) return `#/map?from=${encodeURIComponent(s.route.from)}&to=${encodeURIComponent(s.route.to)}`;   // a route: the map draws it again
     if (s.kind === 'place') return `#/map?lat=${s.lat}&lon=${s.lon}&z=16&pin=${encodeURIComponent(s.title || s.name || 'Place from the answer')}`;
     if (s.kind === 'video') return `#/watch/${encodeURIComponent(s.doc_id)}?${s.t != null ? 't=' + Math.floor(s.t) + '&' : ''}from=${encodeURIComponent(here())}`;
     if (s.kind === 'zim' || s.zim) {
