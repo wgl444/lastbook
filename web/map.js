@@ -36,6 +36,7 @@ const MapView = (() => {
     ['hardware', 'Hardware stores', '⚒', '#546e7a', 'hardware,doityourself', 'supply'],
     ['fuel', 'Fuel stations', 'G', '#37474f', 'fuel', 'supply'],
     ['camp', 'Campsites', '▲', '#558b2f', 'camp_site', 'supply'],
+    ['huts', 'Huts & trail shelters', 'Hu', '#7b5e3b', 'hut,trail_shelter', 'supply'],
     ['orchard', 'Orchards: nuts, fruit, citrus, olives', '♣', '#3f7a2a', 'orchard', 'food'],
     ['vineyard', 'Vineyards (grapes)', '✽', '#6a2c8f', 'vineyard', 'food'],
     ['berries', 'Berries & asparagus', '✿', '#3949ab', 'berries,perennial_veg', 'food'],
@@ -48,7 +49,7 @@ const MapView = (() => {
   const BY_CLS = {}; for (const l of LAYERS) for (const c of l.cls) BY_CLS[c] = l;
   const DEFAULT_LAYERS = ['hospital', 'clinic', 'pharmacy', 'fire', 'police', 'shelter', 'water', 'reservoir', 'fish', 'boat'];
   const PRESETS = [['Emergency', ['hospital', 'clinic', 'dentist', 'pharmacy', 'fire', 'police', 'shelter', 'community']], ['Water', ['water', 'spring', 'reservoir', 'pond', 'dam', 'fish', 'boat']],
-    ['Supplies', ['food', 'hardware', 'fuel', 'camp']], ['Food trees', ['orchard', 'vineyard', 'berries']], ['Resources', ['fish', 'boat', 'mineral', 'well']], ['All', LAYERS.map(l => l.id)]];
+    ['Supplies', ['food', 'hardware', 'fuel', 'camp', 'huts']], ['Food trees', ['orchard', 'vineyard', 'berries']], ['Resources', ['fish', 'boat', 'mineral', 'well']], ['All', LAYERS.map(l => l.id)]];
   const LEGACY = { all_resources: ['fish', 'boat', 'mineral', 'well'], mineral: ['mineral'], oil_gas_well: ['well'], fish_stocking: ['fish'], boat_launch: ['boat'] };
   const FIELD = { commod1: 'Commodity', commod2: 'Also', commod3: 'Also', ore: 'Ore', dev_stat: 'Recorded status', oper_type: 'Operation', yr_lst_prd: 'Last production year',
     county: 'County', state: 'State',  WellTypeLabel: 'Well type', WellStatus: 'Well status', FieldName: 'Field', API: 'API number', CountyName: 'County',
@@ -57,6 +58,7 @@ const MapView = (() => {
     normal_storage_af: 'Normal storage (acre-ft)', max_storage_af: 'Max storage (acre-ft)', surface_acres: 'Surface (acres)', height_ft: 'Height (ft)', year: 'Built',
     dam_type: 'Dam type', hazard: 'Downstream hazard if it failed', condition: 'Condition', status: 'Status', area_acres: 'Area (acres)', water_type: 'Water present',
     reservoir_type: 'Reservoir type', crop: 'Crop', crop_acres: 'Acres of it in this ~600 m block', perennial_acres: 'All tree, vine & berry acres in block', year: 'Satellite crop map year',
+    hut_type: 'Type', run_by: 'Run by', access: 'Access', fee: 'Fee', reservation: 'Reservation', locked: 'Locked', fireplace: 'Fireplace', elevation_m: 'Elevation (m)',
     FUEL_SALES: 'Fuel sales', NO_OF_RAMP_LANE_USE_ONE_TIME: 'Ramp lanes', FISH_CLEANING: 'Fish cleaning', Comments: 'Notes', Website: 'Website' };
   const CAVEAT = { mineral: 'USGS mineral record: an occurrence or past mine, not proof of recoverable ore, access or safety. Old workings can be deadly.',
     oil_gas_well: 'State well record. Most are plugged or idle; never approach an unsealed well head.', fish_stocking: 'A past stocking record — it does not confirm fish are present now.',
@@ -788,7 +790,7 @@ const MapView = (() => {
       .map(([k, v]) => `<tr><th>${escH(FIELD[k])}</th><td>${escH(v)}</td></tr>`).join('');
     const el = openCard(`${back ? `<button class="back">← ${escH(back.title)}</button>` : ''}<div class="kind">${sym(l, 20)}${escH(l.label)}</div><h3>${escH(unnamed(p))}</h3>
       ${p.records > 1 ? `<p class="muted small">${p.records} source records at this spot</p>` : ''}
-      ${rows ? `<table>${rows}</table>` : p.summary ? `<p>${escH(p.summary)}</p>` : ''}${detail.not_drinking_water ? `<p class="caveat"><b>Not a water source:</b> this is a ${escH((detail.reservoir_type || 'waste pond').toLowerCase())}. It can hold sewage, mine waste or chemicals that treatment won’t make safe.</p>` : ''}${/tailings/i.test(detail.purposes || '') ? '<p class="caveat"><b>Mine-tailings dam:</b> it holds mine waste, not usable water. Do not drink, swim or fish here.</p>' : ''}${CAVEAT[p.cls] && !detail.not_drinking_water ? `<p class="caveat">${escH(CAVEAT[p.cls])}</p>` : ''}${coordsBlock(p)}
+      ${rows ? `<table>${rows}</table>` : p.summary ? `<p>${escH(p.summary)}</p>` : ''}${detail.not_drinking_water ? `<p class="caveat"><b>Not a water source:</b> this is a ${escH((detail.reservoir_type || 'waste pond').toLowerCase())}. It can hold sewage, mine waste or chemicals that treatment won’t make safe.</p>` : ''}${p.cls === 'hut' || p.cls === 'trail_shelter' ? `<p class="caveat"><b>${p.cls === 'trail_shelter' ? 'May be full, or need a reservation.' : 'May be locked, full, or need a reservation.'}</b>${p.cls === 'trail_shelter' ? ' A lean-to keeps off rain and wind. It has no door and no heat.' : ''}</p>` : ''}${/tailings/i.test(detail.purposes || '') ? '<p class="caveat"><b>Mine-tailings dam:</b> it holds mine waste, not usable water. Do not drink, swim or fish here.</p>' : ''}${CAVEAT[p.cls] && !detail.not_drinking_water ? `<p class="caveat">${escH(CAVEAT[p.cls])}</p>` : ''}${coordsBlock(p)}
       <div class="acts"><button data-a="zoom">Zoom here</button><button data-a="copy">Copy coordinates</button></div>`);   // no web links: the words stay, the addresses go
     if (back) el.querySelector('.back').onclick = () => showMembers(back.p);
     wireCoords(p); reveal(p.lat, p.lon);

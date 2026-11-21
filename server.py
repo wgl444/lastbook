@@ -849,7 +849,7 @@ def data_version():
     """Changes whenever map data changes: every 20 s while the national map builds, and when the water inventory is written."""
     status = national_status()
     v = f"n{int(time.time() // 20)}" if status.get('state') == 'building' else f"n{status.get('features', 0)}"
-    for f in (WATERDB, WATERDB.with_name(WATERDB.name + '-wal'), CROPDB, TERRAINDB, BLDGDB, BLDGDB.with_name(BLDGDB.name + '-wal')):
+    for f in (WATERDB, WATERDB.with_name(WATERDB.name + '-wal'), CROPDB, HUTSDB, TERRAINDB, BLDGDB, BLDGDB.with_name(BLDGDB.name + '-wal')):
         try:
             v += f".{int(f.stat().st_mtime) // 60}"
         except OSError:
@@ -1069,25 +1069,30 @@ HELP = {'hospital': 'Hospital', 'clinic': 'Clinic', 'doctors': 'Doctor', 'pharma
         'embassy': 'Embassy', 'mineral': 'Recorded mineral / mine', 'oil_gas_well': 'Recorded oil / gas well',
         'boat_launch': 'Boating facility', 'fish_stocking': 'Fish-stocking record',
         'dam': 'Dam (National Inventory of Dams)', 'reservoir': 'Reservoir', 'lake': 'Lake or pond', 'pond': 'Pond',
-        'orchard': 'Orchard', 'vineyard': 'Vineyard', 'berries': 'Berry field', 'perennial_veg': 'Asparagus field'}
+        'orchard': 'Orchard', 'vineyard': 'Vineyard', 'berries': 'Berry field', 'perennial_veg': 'Asparagus field',
+        'hut': 'Hut or cabin', 'trail_shelter': 'Trail shelter'}
 
 
 CROP_KINDS = {'orchard', 'vineyard', 'berries', 'perennial_veg'}
-RESOURCE_KINDS = {'mineral', 'oil_gas_well', 'boat_launch', 'fish_stocking', 'dam', 'reservoir', 'lake', 'pond'} | CROP_KINDS
+HUT_KINDS = {'hut', 'trail_shelter'}  # mountain huts, cabins and lean-tos from OpenStreetMap (tools/build_huts.py)
+RESOURCE_KINDS = {'mineral', 'oil_gas_well', 'boat_launch', 'fish_stocking', 'dam', 'reservoir', 'lake', 'pond'} | CROP_KINDS | HUT_KINDS
 WATERDB = HERE / 'derived/geo/water.sqlite'
 CROPDB = HERE / 'derived/geo/crops.sqlite'
+HUTSDB = Path(os.environ.get('LASTBOOK_HUTS') or HERE / 'derived/geo/huts.sqlite')
 
 
 def resource_dbs(kinds):
     """Point databases holding these resource kinds: the library's resource atlas and the derived water inventory."""
     water = {'dam', 'reservoir', 'lake', 'pond'}
     out = []
-    if set(kinds) - water - CROP_KINDS and (LIB / 'geography/resources/atlas.sqlite').exists():
+    if set(kinds) - water - CROP_KINDS - HUT_KINDS and (LIB / 'geography/resources/atlas.sqlite').exists():
         out.append(LIB / 'geography/resources/atlas.sqlite')
     if set(kinds) & water and WATERDB.exists():
         out.append(WATERDB)
     if set(kinds) & CROP_KINDS and CROPDB.exists():
         out.append(CROPDB)
+    if set(kinds) & HUT_KINDS and HUTSDB.exists():
+        out.append(HUTSDB)
     return out
 
 
@@ -1146,7 +1151,8 @@ def _resource_summary(cls, detail):
     keys = {'mineral': ('commod1', 'commod2', 'dev_stat'), 'oil_gas_well': ('WellTypeLabel', 'FieldName', 'API'),
             'fish_stocking': ('FishType', 'Counties'), 'boat_launch': ('Water_Body', 'Facility_Type'),
             'dam': ('purpose', 'river', 'county'), 'reservoir': ('reservoir_type', 'water_type', 'state'),
-            'orchard': ('crop',), 'vineyard': ('crop',), 'berries': ('crop',), 'perennial_veg': ('crop',), 'lake': ('water_type', 'state'), 'pond': ('water_type', 'state')}.get(cls, ())
+            'orchard': ('crop',), 'vineyard': ('crop',), 'berries': ('crop',), 'perennial_veg': ('crop',), 'lake': ('water_type', 'state'), 'pond': ('water_type', 'state'),
+            'hut': ('hut_type', 'run_by', 'booking'), 'trail_shelter': ('hut_type', 'run_by', 'booking')}.get(cls, ())
     out = [str(detail.get(k)) for k in keys if detail.get(k)]
     if detail.get('not_drinking_water'):
         out.insert(0, 'NOT drinking water')
@@ -1360,6 +1366,31 @@ def word_sets(words):
             yield words[:i] + words[i + 1:]
 
 
+HUT_WORDS = {'hut', 'huts', 'cabin', 'cabins', 'shelter', 'shelters', 'yurt', 'lean'}
+
+
+def hut_places(q, limit=6, near=None):
+    """Named huts, cabins and trail shelters whose name has every word of the query (a few thousand rows: no index needed)."""
+    words = [w.lower() for w in re.findall(r'\w+', q)]
+    if not words or not HUTSDB.exists():
+        return []
+    with sqlite3.connect(ro_uri(HUTSDB), uri=True) as db:
+        rows = db.execute("SELECT kind,name,lat,lon,detail FROM resource WHERE name!='' AND " + ' AND '.join('name LIKE ?' for _ in words) + ' LIMIT 300',
+                          [f'%{w}%' for w in words]).fetchall()
+    out = []
+    for kind, name, lat, lon, raw in rows:
+        d = json.loads(raw or '{}')
+        away = ''
+        if near:
+            km = haversine(near[0], near[1], lat, lon)[0]
+            away = f" · {km / 1.609:,.0f} mi away" if km >= 1.6 else ' · nearby'
+        score = (name.lower() == q.lower().strip()) * 3 + near_bonus(near, lat, lon)
+        out.append((score, {'name': name, 'kind': HELP[kind], 'detail': ' · '.join(x for x in (d.get('run_by') or d.get('hut_type'), d.get('booking')) if x) + away,
+                            'lat': lat, 'lon': lon, 'source': 'huts', 'onMap': True}))
+    out.sort(key=lambda t: -t[0])
+    return [o for _, o in out[:limit]]
+
+
 def water_places(q, limit=10, near=None):
     """Named lakes, reservoirs and dams matching the query (generic words like 'lake' only help ranking)."""
     if not WATERDB.exists():
@@ -1460,7 +1491,11 @@ def places(q, limit=20, near=None):
     water = water_places(q, near=near)
     if water:  # a query that names a water word puts lakes and dams first; otherwise towns lead
         out = (water + out) if set(w.lower() for w in re.findall(r'\w+', q)) & WATER_WORDS else (out[:8] + water + out[8:])
-    return out[:limit + len(water)]
+    huts = hut_places(q, near=near)
+    if huts:  # the same for a hut word, or when the query is a hut's whole name
+        first = set(w.lower() for w in re.findall(r'\w+', q)) & HUT_WORDS or any(h['name'].lower() == q.lower().strip() for h in huts)
+        out = (huts + out) if first else (out[:8] + huts + out[8:])
+    return out[:limit + len(water) + len(huts)]
 
 
 _cov = {'at': 0}
@@ -1542,7 +1577,7 @@ def map_contents():
                 pass
             finally:
                 db.close()
-    for path in (LIB / 'geography/resources/atlas.sqlite', WATERDB, CROPDB):
+    for path in (LIB / 'geography/resources/atlas.sqlite', WATERDB, CROPDB, HUTSDB):
         kinds |= set(_distinct(path, 'SELECT DISTINCT kind FROM resource'))
     contours = any(r for r in _distinct(TERRAINDB, 'SELECT 1 FROM tile WHERE z>=11 LIMIT 1'))
     bounds = None
