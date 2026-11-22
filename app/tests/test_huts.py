@@ -54,10 +54,17 @@ class Huts(unittest.TestCase):
 
     def test_detail_says_only_what_the_tags_say(self):
         d = json.loads(self.db.execute("SELECT detail FROM resource WHERE name='Example Cabin'").fetchone()[0])
-        self.assertEqual(d, {'hut_type': 'Unstaffed hut or cabin', 'run_by': 'Example Hut Association', 'access': 'Open to the public',
+        # access=yes beside a required booking is left out: the public may book it, not walk in
+        self.assertEqual(d, {'hut_type': 'Unstaffed hut or cabin', 'run_by': 'Example Hut Association',
                              'fee': 'Yes', 'reservation': 'Required', 'booking': 'Reservation required', 'fireplace': 'Yes', 'elevation_m': 3520})
         bare = json.loads(self.db.execute("SELECT detail FROM resource WHERE name='Example Hut'").fetchone()[0])
-        self.assertEqual(bare, {'hut_type': 'Staffed mountain hut'})          # nothing about access is guessed
+        self.assertEqual(bare, {'hut_type': 'Staffed mountain hut', 'access': 'Not recorded'})   # said, not guessed
+        lean = json.loads(self.db.execute("SELECT detail FROM resource WHERE name='Example Lean-to'").fetchone()[0])
+        self.assertEqual(lean, {'hut_type': 'Lean-to: three walls and a roof', 'access': 'Not recorded'})
+
+    def test_the_month_the_data_was_read_is_kept(self):
+        d = build_huts.detail({'tourism': 'wilderness_hut', 'access': 'yes', 'fee': 'no'}, 'Unstaffed hut or cabin', 'November 2026')
+        self.assertEqual(d, {'hut_type': 'Unstaffed hut or cabin', 'access': 'Open to the public', 'fee': 'No', 'as_of': 'November 2026'})
 
     def test_a_way_is_placed_at_its_centre_and_every_row_is_indexed(self):
         self.assertEqual(self.db.execute("SELECT lat, lon, source_id FROM resource WHERE name='Way Cabin'").fetchone(), (61.1, -149.5, 'way/6'))

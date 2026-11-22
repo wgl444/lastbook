@@ -47,6 +47,15 @@ const MapView = (() => {
   ].map(([id, label, sym, col, cls, group]) => ({ id, label, sym, col, cls: cls.split(','), group }));
   const GROUPS = [['help', 'Emergency help'], ['water', 'Water'], ['supply', 'Supplies & camping'], ['food', 'Food that keeps growing (2025 crop maps)'], ['resource', 'Natural resources (historical records)']];
   const BY_CLS = {}; for (const l of LAYERS) for (const c of l.cls) BY_CLS[c] = l;
+  // Huts and trail shelters: the caution follows what the map data records about booking, and says so when it records
+  // nothing. The data is read once, offline, and a hut's rules change: the card names the month it was read.
+  function hutCaution(d, leanTo) {
+    const [head, rest] = d.reservation === 'Required' || d.reservation === 'Members only' ? ['Reservation required.', 'Without one it may be locked or full.']
+      : d.reservation === 'Not needed' ? ['First come, first served.', 'It may be full.']
+      : d.reservation ? ['Reservations are taken.', 'It may be full.']
+      : ['Booking is not recorded.', leanTo ? 'It may be full, or need a reservation.' : 'It may be locked, full or closed for the season, or need a reservation.'];
+    return `<p class="caveat"><b>${head}</b> ${rest}${leanTo ? ' A lean-to keeps off rain and wind. It has no door and no heat.' : ''}${d.as_of ? ` Map data from ${escH(d.as_of)}: check with whoever runs it.` : ''}</p>`;
+  }
   const DEFAULT_LAYERS = ['hospital', 'clinic', 'pharmacy', 'fire', 'police', 'shelter', 'water', 'reservoir', 'fish', 'boat'];
   const PRESETS = [['Emergency', ['hospital', 'clinic', 'dentist', 'pharmacy', 'fire', 'police', 'shelter', 'community']], ['Water', ['water', 'spring', 'reservoir', 'pond', 'dam', 'fish', 'boat']],
     ['Supplies', ['food', 'hardware', 'fuel', 'camp', 'huts']], ['Food trees', ['orchard', 'vineyard', 'berries']], ['Resources', ['fish', 'boat', 'mineral', 'well']], ['All', LAYERS.map(l => l.id)]];
@@ -790,7 +799,7 @@ const MapView = (() => {
       .map(([k, v]) => `<tr><th>${escH(FIELD[k])}</th><td>${escH(v)}</td></tr>`).join('');
     const el = openCard(`${back ? `<button class="back">← ${escH(back.title)}</button>` : ''}<div class="kind">${sym(l, 20)}${escH(l.label)}</div><h3>${escH(unnamed(p))}</h3>
       ${p.records > 1 ? `<p class="muted small">${p.records} source records at this spot</p>` : ''}
-      ${rows ? `<table>${rows}</table>` : p.summary ? `<p>${escH(p.summary)}</p>` : ''}${detail.not_drinking_water ? `<p class="caveat"><b>Not a water source:</b> this is a ${escH((detail.reservoir_type || 'waste pond').toLowerCase())}. It can hold sewage, mine waste or chemicals that treatment won’t make safe.</p>` : ''}${p.cls === 'hut' || p.cls === 'trail_shelter' ? `<p class="caveat"><b>${p.cls === 'trail_shelter' ? 'May be full, or need a reservation.' : 'May be locked, full, or need a reservation.'}</b>${p.cls === 'trail_shelter' ? ' A lean-to keeps off rain and wind. It has no door and no heat.' : ''}</p>` : ''}${/tailings/i.test(detail.purposes || '') ? '<p class="caveat"><b>Mine-tailings dam:</b> it holds mine waste, not usable water. Do not drink, swim or fish here.</p>' : ''}${CAVEAT[p.cls] && !detail.not_drinking_water ? `<p class="caveat">${escH(CAVEAT[p.cls])}</p>` : ''}${coordsBlock(p)}
+      ${rows ? `<table>${rows}</table>` : p.summary ? `<p>${escH(p.summary)}</p>` : ''}${detail.not_drinking_water ? `<p class="caveat"><b>Not a water source:</b> this is a ${escH((detail.reservoir_type || 'waste pond').toLowerCase())}. It can hold sewage, mine waste or chemicals that treatment won’t make safe.</p>` : ''}${p.cls === 'hut' || p.cls === 'trail_shelter' ? hutCaution(detail, p.cls === 'trail_shelter') : ''}${/tailings/i.test(detail.purposes || '') ? '<p class="caveat"><b>Mine-tailings dam:</b> it holds mine waste, not usable water. Do not drink, swim or fish here.</p>' : ''}${CAVEAT[p.cls] && !detail.not_drinking_water ? `<p class="caveat">${escH(CAVEAT[p.cls])}</p>` : ''}${coordsBlock(p)}
       <div class="acts"><button data-a="zoom">Zoom here</button><button data-a="copy">Copy coordinates</button></div>`);   // no web links: the words stay, the addresses go
     if (back) el.querySelector('.back').onclick = () => showMembers(back.p);
     wireCoords(p); reveal(p.lat, p.lon);

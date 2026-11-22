@@ -57,8 +57,9 @@ def classify(tags):
     return None
 
 
-def detail(tags, hut_type):
-    """What the map data says about the place, in the words the card shows. Missing tags are left out, not guessed."""
+def detail(tags, hut_type, as_of=''):
+    """What the map data says about the place, in the words the card shows. Nothing is guessed: where the data
+    records no access, booking, fee or lock at all, the card says "Not recorded" in place of leaving the row out."""
     tag = lambda k: tags.get(k, '').strip().lower()
     d = {'hut_type': hut_type, 'run_by': tags.get('operator', '').strip(),
          'access': ACCESS.get(tag('access'), tag('access').replace('_', ' ')),
@@ -67,9 +68,15 @@ def detail(tags, hut_type):
          # the one-line summary says a reservation is needed before it says a place is open to the public
          'booking': {'required': 'Reservation required', 'yes': 'Reservations taken', 'recommended': 'Reservation recommended',
                      'no': 'No reservation needed'}.get(tag('reservation'), '')}
+    # access=yes beside a required booking means the public may book it, not walk in: the reservation row says enough
+    if tag('access') in ('yes', 'public') and tag('reservation') in ('required', 'yes', 'members_only'):
+        d['access'] = ''
+    if not any(d[k] for k in ('access', 'reservation', 'fee', 'locked')):
+        d['access'] = 'Not recorded'
     ele = re.fullmatch(r'\s*(-?\d+(?:\.\d+)?)\s*m?\s*', tags.get('ele', ''))
     if ele:
         d['elevation_m'] = round(float(ele[1]))
+    d['as_of'] = as_of                   # the month the map data was read, shown in the card's caution
     return {k: v for k, v in d.items() if v not in ('', None)}
 
 
@@ -105,8 +112,8 @@ def from_extract(path):
     return found
 
 
-def build(items, out):
-    """Write huts.sqlite from (source id, tags, lat, lon) items; returns {kind: count}."""
+def build(items, out, as_of=''):
+    """Write huts.sqlite from (source id, tags, lat, lon) items; returns {kind: count}. as_of: e.g. "November 2026"."""
     out = Path(out)
     out.parent.mkdir(parents=True, exist_ok=True)
     if out.exists():
@@ -134,7 +141,7 @@ def build(items, out):
             spots.append((lat, lon))
         cur = db.execute('INSERT INTO resource(source_id,kind,name,lat,lon,detail,source) VALUES (?,?,?,?,?,?,?)',
                          (source_id, kind, tags.get('name', '').strip(), lat, lon,
-                          json.dumps(detail(tags, hut_type), ensure_ascii=False), SOURCE))   # key order is the card's row order
+                          json.dumps(detail(tags, hut_type, as_of), ensure_ascii=False), SOURCE))   # key order is the card's row order
         db.execute('INSERT INTO spatial VALUES (?,?,?,?,?)', (cur.lastrowid, lon, lon, lat, lat))
         counts[kind] = counts.get(kind, 0) + 1
     db.execute("INSERT INTO meta VALUES ('counts', ?)", (json.dumps(counts, sort_keys=True),))
@@ -148,9 +155,15 @@ def main(args):
     src = ap.add_mutually_exclusive_group(required=True)
     src.add_argument('--overpass', type=Path, help='an Overpass API result (JSON, "out tags center")')
     src.add_argument('--osm', type=Path, help='a raw OpenStreetMap extract (.osm.pbf); needs the osmium package')
+    ap.add_argument('--as-of', dest='as_of', help='when the map data was read, e.g. "November 2026" (taken from an Overpass result if left out)')
     ap.add_argument('--out', type=Path, required=True, help='the file to write, e.g. <data folder>/derived/geo/huts.sqlite')
     a = ap.parse_args(args)
-    counts = build(from_overpass(a.overpass) if a.overpass else from_extract(a.osm), a.out)
+    as_of = a.as_of
+    if not as_of and a.overpass:         # an Overpass result carries the time of the data it was read from
+        stamp = json.loads(a.overpass.read_text(encoding='utf-8')).get('osm3s', {}).get('timestamp_osm_base', '')
+        if re.match(r'\d{4}-\d{2}', stamp):
+            as_of = f"{'January February March April May June July August September October November December'.split()[int(stamp[5:7]) - 1]} {stamp[:4]}"
+    counts = build(from_overpass(a.overpass) if a.overpass else from_extract(a.osm), a.out, as_of or '')
     print(f"{a.out}: {sum(counts.values()):,} places " + ', '.join(f'{k} {n:,}' for k, n in sorted(counts.items())))
 
 
